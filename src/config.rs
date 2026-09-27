@@ -67,6 +67,14 @@ pub struct Config {
     )]
     pub memory_cache_max_tile_bytes: usize,
 
+    /// Evict memory-cached tiles not accessed for this many seconds. Zero disables TTL eviction.
+    #[arg(
+        long,
+        env = "TILE_CACHE_MEMORY_CACHE_IDLE_SECONDS",
+        default_value_t = 10_800
+    )]
+    pub memory_cache_idle_seconds: u64,
+
     /// Bounded write queue capacity; overload is rejected with HTTP 503.
     #[arg(long, env = "TILE_CACHE_WRITE_QUEUE", default_value_t = 4096)]
     pub write_queue: usize,

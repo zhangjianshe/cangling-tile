@@ -84,6 +84,7 @@ struct MemoryCacheInner {
 struct MemoryCacheEntry {
     data: Arc<[u8]>,
     last_used: u64,
+    last_accessed: Instant,
 }
 
 impl TileMemoryCache {
@@ -107,6 +108,7 @@ impl TileMemoryCache {
         let tick = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
         let data = if let Some(entry) = inner.entries.get_mut(key) {
             entry.last_used = tick;
+            entry.last_accessed = Instant::now();
             Some(entry.data.clone())
         } else {
             None
@@ -136,6 +138,7 @@ impl TileMemoryCache {
             MemoryCacheEntry {
                 data,
                 last_used: tick,
+                last_accessed: Instant::now(),
             },
         );
         inner.order.push(Reverse((tick, key)));
@@ -167,6 +170,34 @@ impl TileMemoryCache {
 
     fn invalidate_database(&self, database: &str) {
         self.invalidate(|key| key.database == database);
+    }
+
+    fn evict_idle(&self, idle_timeout: Duration) -> usize {
+        if self.capacity == 0 || idle_timeout.is_zero() {
+            return 0;
+        }
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let before = inner.entries.len();
+        let mut removed_bytes = 0usize;
+        inner.entries.retain(|_, entry| {
+            if entry.last_accessed.elapsed() >= idle_timeout {
+                removed_bytes = removed_bytes.saturating_add(entry.data.len());
+                false
+            } else {
+                true
+            }
+        });
+        inner.used_bytes = inner.used_bytes.saturating_sub(removed_bytes);
+        let removed = before.saturating_sub(inner.entries.len());
+        if removed > 0 {
+            self.evictions.fetch_add(removed as u64, Ordering::Relaxed);
+            inner.order = inner
+                .entries
+                .iter()
+                .map(|(key, entry)| Reverse((entry.last_used, key.clone())))
+                .collect();
+        }
+        removed
     }
 
     fn invalidate(&self, predicate: impl Fn(&TileKey) -> bool) {
@@ -260,6 +291,10 @@ impl TileStore {
 
     pub fn memory_cache_metrics(&self) -> MemoryCacheMetrics {
         self.inner.memory_cache.metrics()
+    }
+
+    pub fn evict_idle_memory_tiles(&self, idle_timeout: Duration) -> usize {
+        self.inner.memory_cache.evict_idle(idle_timeout)
     }
 
     pub fn database_path(&self, database: &str) -> Result<String, ApiError> {
@@ -1140,6 +1175,27 @@ mod tests {
         assert_eq!(metrics.used_bytes, 6);
         assert_eq!(metrics.entries, 2);
         assert_eq!(metrics.evictions, 1);
+    }
+
+    #[test]
+    fn memory_cache_evicts_only_idle_tiles() {
+        let cache = TileMemoryCache::new(32, 16);
+        let idle = key("database", "idle", 1, 1, 1);
+        let active = key("database", "active", 1, 1, 1);
+        cache.insert(idle.clone(), vec![1; 4]);
+        cache.insert(active.clone(), vec![2; 4]);
+        {
+            let mut inner = cache.inner.lock().unwrap();
+            inner.entries.get_mut(&idle).unwrap().last_accessed =
+                Instant::now() - Duration::from_secs(4 * 60 * 60);
+        }
+
+        assert_eq!(cache.evict_idle(Duration::from_secs(3 * 60 * 60)), 1);
+        assert!(cache.get(&idle).is_none());
+        assert_eq!(cache.get(&active).as_deref(), Some([2, 2, 2, 2].as_slice()));
+        let metrics = cache.metrics();
+        assert_eq!(metrics.entries, 1);
+        assert_eq!(metrics.used_bytes, 4);
     }
 
     #[test]

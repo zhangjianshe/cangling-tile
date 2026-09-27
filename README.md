@@ -57,7 +57,7 @@ Dashboard 的“清理策略”页提供“重建目录”按钮。重建作为�
 
 PUT 在瓦片分片提交成功后即返回，目录增量通过容量为 65,536 的有界队列在内存中按数据库和图层合并，每 60 秒批量写入；队列满时生产者会等待而不会丢失统计。Dashboard 的数量、容量和范围因此最多延迟约一分钟，但管理 SQLite 的抖动不会把已经成功写入的瓦片误报为失败。重命名、回收策略和删除等管理操作会先强制刷新待处理目录增量，避免操作到过期记录。
 
-GET 在访问 SQLite 前会查询进程内瓦片 LRU。LRU 按瓦片实际字节数限制容量，缺省为 512 MiB；PUT 成功后直接写入缓存，覆盖、删除图层或删除数据库时同步失效相关条目。404/空瓦片不会进入缓存，单块超过 2 MiB 的瓦片缺省不进入 LRU，避免少数异常大对象挤出热点数据。该缓存是每个实例独立的性能缓存，不影响共享瓦片数据库的一致性；设置 `TILE_CACHE_MEMORY_CACHE_BYTES=0` 可关闭。
+GET 在访问 SQLite 前会查询进程内瓦片 LRU。LRU 按瓦片实际字节数限制容量，缺省为 512 MiB；同时按最后访问时间清理空闲条目，缺省 TTL 为 3 小时，后台每 5 分钟扫描一次，因此条目最多可能额外保留约 5 分钟。PUT 成功后直接写入缓存，覆盖、删除图层或删除数据库时同步失效相关条目。404/空瓦片不会进入缓存，单块超过 2 MiB 的瓦片缺省不进入 LRU，避免少数异常大对象挤出热点数据。该缓存是每个实例独立的性能缓存，不影响共享瓦片数据库的一致性；设置 `TILE_CACHE_MEMORY_CACHE_BYTES=0` 可关闭 LRU，设置 `TILE_CACHE_MEMORY_CACHE_IDLE_SECONDS=0` 可关闭空闲 TTL。
 
 瓦片写入不预查询旧记录：先执行 `INSERT OR IGNORE`，键冲突时直接 `UPDATE` 覆盖。新增瓦片可以直接增量统计；发生覆盖的图层会在下一次分钟级目录刷新时从分片重新汇总数量和容量，保证 Dashboard 最终准确而不阻塞 PUT 主路径。
 
@@ -251,6 +251,7 @@ sudo chown -R 10001:10001 ./tiledata ./config
 | `TILE_CACHE_MAX_TILE_BYTES` | `33554432` | 单瓦片最大字节数 |
 | `TILE_CACHE_MEMORY_CACHE_BYTES` | `536870912` | 进程内瓦片 LRU 容量（字节），即 512 MiB；`0` 禁用 |
 | `TILE_CACHE_MEMORY_CACHE_MAX_TILE_BYTES` | `2097152` | 允许进入 LRU 的单瓦片最大字节数，即 2 MiB |
+| `TILE_CACHE_MEMORY_CACHE_IDLE_SECONDS` | `10800` | 内存瓦片空闲 TTL（秒），缺省 3 小时；`0` 禁用 |
 | `TILE_CACHE_WRITE_QUEUE` | `4096` | 有界写队列容量 |
 | `TILE_CACHE_READ_CONNECTIONS` | `4` | 每个已打开分片的 SQLite 最大读连接数 |
 | `TILE_CACHE_SHARD_IDLE_SECONDS` | `300` | 分片无请求后关闭连接的时间；每分钟检查一次，`0` 禁用 |

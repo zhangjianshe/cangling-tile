@@ -89,6 +89,7 @@ async fn run(config: Config) -> Result<()> {
          ├─ max tile size    : {} bytes ({:.2} MiB)\n\
          ├─ memory tile LRU  : {} bytes ({:.2} MiB)\n\
          ├─ LRU max tile     : {} bytes ({:.2} MiB)\n\
+         ├─ LRU idle TTL     : {} seconds\n\
          └─ retention days   : {}",
         config.addr,
         config.root_dir.display(),
@@ -110,6 +111,7 @@ async fn run(config: Config) -> Result<()> {
         config.memory_cache_bytes as f64 / 1_048_576.0,
         config.memory_cache_max_tile_bytes,
         config.memory_cache_max_tile_bytes as f64 / 1_048_576.0,
+        config.memory_cache_idle_seconds,
         config.retention_days,
     );
     let store = TileStore::open_with_cache(
@@ -176,12 +178,24 @@ async fn run(config: Config) -> Result<()> {
         let cleanup_catalog = catalog.clone();
         let cleanup_stats = stats.clone();
         let runtime_settings = cleanup_settings.clone();
+        let memory_cache_idle_seconds = config.memory_cache_idle_seconds;
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
+            let mut last_memory_cache_cleanup = tokio::time::Instant::now();
             interval.tick().await;
             loop {
                 interval.tick().await;
                 let settings = runtime_settings.read().await.clone();
+                if memory_cache_idle_seconds > 0
+                    && last_memory_cache_cleanup.elapsed() >= Duration::from_secs(5 * 60)
+                {
+                    let evicted = cleanup_store
+                        .evict_idle_memory_tiles(Duration::from_secs(memory_cache_idle_seconds));
+                    last_memory_cache_cleanup = tokio::time::Instant::now();
+                    if evicted > 0 {
+                        tracing::info!(evicted, "idle memory-cached tiles evicted");
+                    }
+                }
                 if settings.shard_idle_seconds > 0 {
                     let closed = cleanup_store
                         .close_idle_shards(Duration::from_secs(settings.shard_idle_seconds))

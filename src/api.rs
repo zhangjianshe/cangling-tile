@@ -1074,6 +1074,13 @@ mod tests {
         assert!(!html.contains("__TILE_CACHE_VERSION__"));
         assert!(!html.contains("Storage service"));
         assert!(html.contains("id=\"rebuildCatalog\""));
+        assert!(html.contains("data-tab=\"about\""));
+        assert!(html.contains("Copyright © imagebot.cn"));
+        assert!(html.contains("class=\"card-icon\""));
+        assert!(!html.contains("正在运行"));
+        assert!(!html.contains(">STORES<"));
+        assert!(!html.contains(">DISK<"));
+        assert!(!html.contains(">RAM<"));
     }
 
     #[tokio::test]
