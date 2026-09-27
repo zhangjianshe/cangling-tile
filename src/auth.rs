@@ -26,7 +26,7 @@ pub struct AuthService {
 impl AuthService {
     pub async fn open(config_dir: &Path) -> Result<Self> {
         tokio::fs::create_dir_all(config_dir).await?;
-        let path = config_dir.join("tile-cache-meta.db");
+        let path = crate::config::management_db_path(config_dir);
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
@@ -158,7 +158,10 @@ pub fn cookie_token(headers: &axum::http::HeaderMap) -> Option<&str> {
         .ok()?
         .split(';')
         .map(str::trim)
-        .find_map(|part| part.strip_prefix("tile_cache_session="))
+        .find_map(|part| {
+            part.strip_prefix("cangling_tile_session=")
+                .or_else(|| part.strip_prefix("tile_cache_session="))
+        })
 }
 pub type SharedAuth = Arc<AuthService>;
 

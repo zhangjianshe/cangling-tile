@@ -25,6 +25,7 @@ use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
+    apply_legacy_environment();
     let config = Config::parse();
     if matches!(&config.command, Some(Command::Healthcheck)) {
         return healthcheck(config.addr);
@@ -37,6 +38,15 @@ fn main() -> Result<()> {
         return runtime.block_on(auth::reset_password(&config.config_dir, password.clone()));
     }
     runtime.block_on(run(config))
+}
+
+fn apply_legacy_environment() {
+    for (key, value) in std::env::vars().filter(|(key, _)| key.starts_with("TILE_CACHE_")) {
+        let replacement = key.replacen("TILE_CACHE_", "CANGLING_TILE_", 1);
+        if std::env::var_os(&replacement).is_none() {
+            std::env::set_var(replacement, value);
+        }
+    }
 }
 
 fn healthcheck(address: SocketAddr) -> Result<()> {
@@ -64,18 +74,18 @@ fn healthcheck(address: SocketAddr) -> Result<()> {
 async fn run(config: Config) -> Result<()> {
     if config.auth_token.trim().is_empty() && !config.allow_unauthenticated_writes {
         bail!(
-            "写接口未配置鉴权：请设置 TILE_CACHE_AUTH_TOKEN；仅隔离开发环境可显式设置 TILE_CACHE_ALLOW_UNAUTHENTICATED_WRITES=true"
+            "写接口未配置鉴权：请设置 CANGLING_TILE_AUTH_TOKEN；仅隔离开发环境可显式设置 CANGLING_TILE_ALLOW_UNAUTHENTICATED_WRITES=true"
         );
     }
     let log_filter = std::env::var("RUST_LOG")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "tile_cache=info,tower_http=info".to_owned());
+        .unwrap_or_else(|| "cangling_tile=info,tower_http=info".to_owned());
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(log_filter))
         .init();
     tracing::info!(
-        "tile-cache effective configuration\n\
+        "cangling-tile effective configuration\n\
          ├─ listen address   : {}\n\
          ├─ tile data root   : {}\n\
          ├─ config directory : {}\n\
@@ -135,7 +145,7 @@ async fn run(config: Config) -> Result<()> {
     let auth_service = auth::AuthService::open(&config.config_dir).await?;
     if !auth_service.configured().await? {
         if config.admin_password.is_some() {
-            eprintln!("尚未配置 Dashboard 管理员，使用 TILE_CACHE_ADMIN_PASSWORD 初始化。");
+            eprintln!("尚未配置 Dashboard 管理员，使用 CANGLING_TILE_ADMIN_PASSWORD 初始化。");
         } else {
             eprintln!("尚未配置 Dashboard 管理员，正在生成初始密码。");
         }
@@ -275,7 +285,7 @@ async fn run(config: Config) -> Result<()> {
     };
     let app = api::router(state, config.max_tile_bytes);
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
-    tracing::info!(address = %config.addr, version = env!("CARGO_PKG_VERSION"), "tile-cache listening");
+    tracing::info!(address = %config.addr, version = env!("CARGO_PKG_VERSION"), "cangling-tile listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;

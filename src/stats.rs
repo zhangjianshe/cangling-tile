@@ -58,7 +58,7 @@ impl AccessStats {
         tokio::fs::create_dir_all(config_dir)
             .await
             .with_context(|| format!("create config directory {}", config_dir.display()))?;
-        let path = config_dir.join("tile-cache-meta.db");
+        let path = crate::config::management_db_path(config_dir);
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)

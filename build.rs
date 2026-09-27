@@ -11,8 +11,8 @@ fn main() {
             .unwrap_or_else(|| "unknown".to_owned())
     });
     let built = std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_owned());
-    println!("cargo:rustc-env=TILE_CACHE_GIT_HASH={git}");
-    println!("cargo:rustc-env=TILE_CACHE_BUILD_TIME={built}");
+    println!("cargo:rustc-env=CANGLING_TILE_GIT_HASH={git}");
+    println!("cargo:rustc-env=CANGLING_TILE_BUILD_TIME={built}");
     println!("cargo:rerun-if-env-changed=GIT_HASH");
     println!("cargo:rerun-if-env-changed=BUILD_TIME");
 }

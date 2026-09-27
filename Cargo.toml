@@ -1,5 +1,5 @@
 [package]
-name = "tile-cache"
+name = "cangling-tile"
 version = "0.1.15"
 edition = "2021"
 description = "Centralized SQLite-backed tile cache service"

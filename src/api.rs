@@ -170,8 +170,8 @@ async fn health() -> Json<HealthResponse<'static>> {
     Json(HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
-        git: env!("TILE_CACHE_GIT_HASH"),
-        built: env!("TILE_CACHE_BUILD_TIME"),
+        git: env!("CANGLING_TILE_GIT_HASH"),
+        built: env!("CANGLING_TILE_BUILD_TIME"),
     })
 }
 
@@ -233,7 +233,7 @@ async fn login(
     Ok((
         [(
             header::SET_COOKIE,
-            format!("tile_cache_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=7200{secure}"),
+            format!("cangling_tile_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=7200{secure}"),
         )],
         Json(serde_json::json!({"authenticated":true})),
     )
@@ -251,7 +251,7 @@ async fn logout(
     Ok((
         [(
             header::SET_COOKIE,
-            format!("tile_cache_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"),
+            format!("cangling_tile_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"),
         )],
         Json(serde_json::json!({"authenticated":false})),
     )
@@ -292,7 +292,7 @@ async fn get_tile(
                     ),
                     (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
                     (
-                        header::HeaderName::from_static("x-tile-cache-miss"),
+                        header::HeaderName::from_static("x-cangling-tile-miss"),
                         HeaderValue::from_static("true"),
                     ),
                 ],
@@ -441,7 +441,8 @@ async fn put_tile_batch(
 
 async fn dashboard() -> Html<String> {
     Html(
-        include_str!("dashboard.html").replace("__TILE_CACHE_VERSION__", env!("CARGO_PKG_VERSION")),
+        include_str!("dashboard.html")
+            .replace("__CANGLING_TILE_VERSION__", env!("CARGO_PKG_VERSION")),
     )
 }
 
@@ -1069,9 +1070,9 @@ mod tests {
     #[tokio::test]
     async fn dashboard_shows_product_name_and_current_version() {
         let html = dashboard().await.0;
-        assert!(html.contains("地图缓存服务"));
+        assert!(html.contains("苍灵瓦片服务"));
         assert!(html.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
-        assert!(!html.contains("__TILE_CACHE_VERSION__"));
+        assert!(!html.contains("__CANGLING_TILE_VERSION__"));
         assert!(!html.contains("Storage service"));
         assert!(html.contains("id=\"rebuildCatalog\""));
         assert!(html.contains("data-tab=\"about\""));
@@ -1232,7 +1233,10 @@ mod tests {
             .unwrap();
         assert_eq!(preview_response.status(), StatusCode::OK);
         assert_eq!(
-            preview_response.headers().get("x-tile-cache-miss").unwrap(),
+            preview_response
+                .headers()
+                .get("x-cangling-tile-miss")
+                .unwrap(),
             "true"
         );
 
