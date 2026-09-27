@@ -1,6 +1,6 @@
 [package]
 name = "tile-cache"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 description = "Centralized SQLite-backed tile cache service"
 
