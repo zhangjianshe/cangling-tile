@@ -13,6 +13,8 @@ cargo check
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+GIT_HASH="$(git rev-parse --short HEAD)" \
+BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
 cargo build --release --locked
 git add Cargo.toml Cargo.lock
 git commit -m "Release v$next"
