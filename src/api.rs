@@ -1077,6 +1077,9 @@ mod tests {
         assert!(html.contains("data-tab=\"about\""));
         assert!(html.contains("Copyright © imagebot.cn"));
         assert!(html.contains("class=\"card-icon\""));
+        assert!(html.contains("formatBuildTime"));
+        assert!(html.contains("servicePath('health')"));
+        assert!(!html.contains("fetch('/health')"));
         assert!(!html.contains("正在运行"));
         assert!(!html.contains(">STORES<"));
         assert!(!html.contains(">DISK<"));
