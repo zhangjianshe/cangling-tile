@@ -457,20 +457,12 @@ async fn put_tile_batch(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn dashboard(State(state): State<AppState>) -> Html<String> {
-    Html(dashboard_html(&state.http_prefix))
+async fn dashboard() -> Html<String> {
+    Html(dashboard_html())
 }
 
-fn dashboard_html(http_prefix: &str) -> String {
-    let html = include_str!("dashboard.html")
-        .replace("__CANGLING_TILE_VERSION__", env!("CARGO_PKG_VERSION"));
-    if http_prefix.is_empty() {
-        return html;
-    }
-    html.replace("\"/assets/", &format!("\"{http_prefix}/assets/"))
-        .replace("'/api/", &format!("'{http_prefix}/api/"))
-        .replace("`/api/", &format!("`{http_prefix}/api/"))
-        .replace("`/tiles/", &format!("`{http_prefix}/tiles/"))
+fn dashboard_html() -> String {
+    include_str!("dashboard.html").replace("__CANGLING_TILE_VERSION__", env!("CARGO_PKG_VERSION"))
 }
 
 async fn openlayers_js() -> impl IntoResponse {
@@ -1096,7 +1088,7 @@ mod tests {
 
     #[tokio::test]
     async fn dashboard_shows_product_name_and_current_version() {
-        let html = dashboard_html("");
+        let html = dashboard_html();
         assert!(html.contains("苍灵瓦片服务"));
         assert!(html.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
         assert!(!html.contains("__CANGLING_TILE_VERSION__"));
@@ -1106,8 +1098,8 @@ mod tests {
         assert!(html.contains("Copyright © imagebot.cn"));
         assert!(html.contains("class=\"card-icon\""));
         assert!(html.contains("formatBuildTime"));
-        assert!(html.contains("servicePath('health')"));
-        assert!(!html.contains("fetch('/health')"));
+        assert!(html.contains("request('/health')"));
+        assert!(!html.contains("window.fetch('/health')"));
         assert!(!html.contains("正在运行"));
         assert!(!html.contains(">STORES<"));
         assert!(!html.contains(">DISK<"));
@@ -1115,13 +1107,14 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_uses_configured_http_prefix() {
-        let html = dashboard_html("/tilecache");
-        assert!(html.contains("href=\"/tilecache/assets/openlayers/ol.css\""));
-        assert!(html.contains("fetch('/tilecache/api/v1/dashboard')"));
-        assert!(html.contains("`/tilecache/api/v1/databases/"));
-        assert!(html.contains("`/tilecache/tiles/"));
-        assert!(!html.contains("fetch('/api/v1/dashboard')"));
+    fn dashboard_uses_browser_location_as_service_base() {
+        let html = dashboard_html();
+        assert!(html.contains("href=\"assets/openlayers/ol.css\""));
+        assert!(html.contains("const request=(path,options)=>window.fetch"));
+        assert!(html.contains("request('/api/v1/dashboard')"));
+        assert!(html.contains("servicePath(`/tiles/"));
+        assert!(!html.contains("href=\"/assets/openlayers/ol.css\""));
+        assert!(!html.contains("window.fetch('/api/"));
     }
 
     #[tokio::test]

@@ -226,8 +226,25 @@ docker run --rm -p 7601:7601 \
   harbor.cangling.cn:22002/cangling/cangling-tile:latest
 ```
 
-部署到反向代理子路径时，设置统一的 HTTP 前缀。例如将服务发布到
-`/tilecache/`：
+Dashboard 会根据浏览器当前页面地址自动推导 API、瓦片和静态资源路径。因此，
+仅需通过 Nginx 将服务发布到 `/tilecache/` 时，可以不配置
+`CANGLING_TILE_HTTP_PREFIX`，并让 Nginx 去掉外部前缀后再转发：
+
+```nginx
+location ^~ /tilecache/ {
+    proxy_pass http://cangling-tile:7601/;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+这种模式下，浏览器访问 `/tilecache/`，Dashboard 请求
+`/tilecache/api/...`；Nginx 去掉 `/tilecache/` 后，服务端仍按根路径接收请求。
+注意此模式的 `proxy_pass` 末尾必须有 `/`。
+
+如果反向代理需要保留前缀转发，设置统一的 HTTP 前缀。例如：
 
 ```bash
 docker run --rm -p 7601:7601 \
@@ -249,7 +266,8 @@ location ^~ /tilecache/ {
 ```
 
 配置后 Dashboard、API、瓦片、OpenLayers 静态资源、会话 Cookie 和容器健康检查
-都会使用 `/tilecache` 前缀。缺省前缀为空，继续从根路径提供服务。
+都会使用 `/tilecache` 前缀。缺省前缀为空，服务端继续从根路径提供服务；Dashboard
+仍可通过第一种 Nginx 配置挂载到任意外部路径，无需重新构建镜像。
 
 镜像使用固定 UID `10001` 运行。Docker named volume 会由 Docker 管理；使用宿主机
 bind mount 时，需要预先让目录对 UID 10001 可写，例如：
