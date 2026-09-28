@@ -41,6 +41,7 @@ pub struct AppState {
     pub cleanup_settings: Arc<RwLock<CleanupSettings>>,
     pub auth: SharedAuth,
     pub secure_cookies: bool,
+    pub http_prefix: Arc<str>,
     pub catalog_rebuild: Arc<StdRwLock<CatalogRebuildStatus>>,
 }
 
@@ -106,6 +107,7 @@ struct AuthStatus {
 }
 
 pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
+    let http_prefix = state.http_prefix.clone();
     let public = Router::new()
         .route("/", get(dashboard))
         .route("/assets/openlayers/ol.js", get(openlayers_js))
@@ -151,7 +153,7 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
             authorize,
         ));
 
-    Router::new()
+    let app = Router::new()
         .route("/health", get(health))
         .merge(public)
         .merge(protected)
@@ -163,7 +165,12 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
             MakeRequestUuid,
         ))
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .with_state(state);
+    if http_prefix.is_empty() {
+        app
+    } else {
+        Router::new().nest(http_prefix.as_ref(), app)
+    }
 }
 
 async fn health() -> Json<HealthResponse<'static>> {
@@ -219,6 +226,14 @@ async fn auth_status(
     }))
 }
 
+fn cookie_path(state: &AppState) -> &str {
+    if state.http_prefix.is_empty() {
+        "/"
+    } else {
+        &state.http_prefix
+    }
+}
+
 async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
@@ -233,7 +248,7 @@ async fn login(
     Ok((
         [(
             header::SET_COOKIE,
-            format!("cangling_tile_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=7200{secure}"),
+            format!("cangling_tile_session={token}; HttpOnly; SameSite=Strict; Path={}; Max-Age=7200{secure}", cookie_path(&state)),
         )],
         Json(serde_json::json!({"authenticated":true})),
     )
@@ -251,7 +266,10 @@ async fn logout(
     Ok((
         [(
             header::SET_COOKIE,
-            format!("cangling_tile_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"),
+            format!(
+                "cangling_tile_session=; HttpOnly; SameSite=Strict; Path={}; Max-Age=0{secure}",
+                cookie_path(&state)
+            ),
         )],
         Json(serde_json::json!({"authenticated":false})),
     )
@@ -439,11 +457,20 @@ async fn put_tile_batch(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn dashboard() -> Html<String> {
-    Html(
-        include_str!("dashboard.html")
-            .replace("__CANGLING_TILE_VERSION__", env!("CARGO_PKG_VERSION")),
-    )
+async fn dashboard(State(state): State<AppState>) -> Html<String> {
+    Html(dashboard_html(&state.http_prefix))
+}
+
+fn dashboard_html(http_prefix: &str) -> String {
+    let html = include_str!("dashboard.html")
+        .replace("__CANGLING_TILE_VERSION__", env!("CARGO_PKG_VERSION"));
+    if http_prefix.is_empty() {
+        return html;
+    }
+    html.replace("\"/assets/", &format!("\"{http_prefix}/assets/"))
+        .replace("'/api/", &format!("'{http_prefix}/api/"))
+        .replace("`/api/", &format!("`{http_prefix}/api/"))
+        .replace("`/tiles/", &format!("`{http_prefix}/tiles/"))
 }
 
 async fn openlayers_js() -> impl IntoResponse {
@@ -1069,7 +1096,7 @@ mod tests {
 
     #[tokio::test]
     async fn dashboard_shows_product_name_and_current_version() {
-        let html = dashboard().await.0;
+        let html = dashboard_html("");
         assert!(html.contains("苍灵瓦片服务"));
         assert!(html.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
         assert!(!html.contains("__CANGLING_TILE_VERSION__"));
@@ -1085,6 +1112,16 @@ mod tests {
         assert!(!html.contains(">STORES<"));
         assert!(!html.contains(">DISK<"));
         assert!(!html.contains(">RAM<"));
+    }
+
+    #[test]
+    fn dashboard_uses_configured_http_prefix() {
+        let html = dashboard_html("/tilecache");
+        assert!(html.contains("href=\"/tilecache/assets/openlayers/ol.css\""));
+        assert!(html.contains("fetch('/tilecache/api/v1/dashboard')"));
+        assert!(html.contains("`/tilecache/api/v1/databases/"));
+        assert!(html.contains("`/tilecache/tiles/"));
+        assert!(!html.contains("fetch('/api/v1/dashboard')"));
     }
 
     #[tokio::test]
@@ -1128,6 +1165,7 @@ mod tests {
                     .unwrap(),
             ),
             secure_cookies: false,
+            http_prefix: Arc::from(""),
             catalog_rebuild: Arc::new(StdRwLock::new(CatalogRebuildStatus::default())),
         };
 
@@ -1177,9 +1215,10 @@ mod tests {
                     .unwrap(),
             ),
             secure_cookies: false,
+            http_prefix: Arc::from(""),
             catalog_rebuild: Arc::new(StdRwLock::new(CatalogRebuildStatus::default())),
         };
-        let app = router(state, 1024);
+        let app = router(state.clone(), 1024);
 
         let get_response = app
             .clone()
@@ -1251,6 +1290,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(put_response.status(), StatusCode::UNAUTHORIZED);
+
+        let mut prefixed_state = state;
+        prefixed_state.http_prefix = Arc::from("/tilecache");
+        let prefixed_app = router(prefixed_state, 1024);
+        let prefixed_response = prefixed_app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/tilecache/api/v1/dashboard")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(prefixed_response.status(), StatusCode::OK);
+        let root_response = prefixed_app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/dashboard")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(root_response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -1279,6 +1343,7 @@ mod tests {
                     .unwrap(),
             ),
             secure_cookies: false,
+            http_prefix: Arc::from(""),
             catalog_rebuild: Arc::new(StdRwLock::new(CatalogRebuildStatus::default())),
         };
         let response = router(state, 1024)
@@ -1320,6 +1385,7 @@ mod tests {
                     .unwrap(),
             ),
             secure_cookies: false,
+            http_prefix: Arc::from(""),
             catalog_rebuild: Arc::new(StdRwLock::new(CatalogRebuildStatus::default())),
         };
         let app = router(state, 4 * 1024 * 1024);

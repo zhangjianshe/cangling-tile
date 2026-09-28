@@ -29,6 +29,15 @@ pub struct Config {
     #[arg(long, env = "CANGLING_TILE_ADDR", default_value = "0.0.0.0:7601")]
     pub addr: SocketAddr,
 
+    /// Optional URL path prefix used when serving behind a reverse proxy.
+    #[arg(
+        long,
+        env = "CANGLING_TILE_HTTP_PREFIX",
+        default_value = "",
+        value_parser = parse_http_prefix
+    )]
+    pub http_prefix: String,
+
     /// Tokio asynchronous runtime worker threads.
     #[arg(long, env = "CANGLING_TILE_WORKER_THREADS", default_value_t = 4)]
     pub worker_threads: usize,
@@ -119,6 +128,20 @@ pub struct Config {
     pub retention_days: u64,
 }
 
+fn parse_http_prefix(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value == "/" {
+        return Ok(String::new());
+    }
+    if value.contains(['?', '#']) || value.split('/').any(|part| part == "." || part == "..") {
+        return Err(
+            "HTTP prefix must be a URL path without query, fragment, '.' or '..' segments"
+                .to_owned(),
+        );
+    }
+    Ok(format!("/{}", value.trim_matches('/')))
+}
+
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
     /// Reset or create the dashboard administrator password.
@@ -146,5 +169,15 @@ mod tests {
         assert_eq!(current, directory.path().join("cangling-tile-meta.db"));
         assert_eq!(std::fs::read(current).unwrap(), b"legacy");
         assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn normalizes_http_prefix() {
+        assert_eq!(parse_http_prefix("").unwrap(), "");
+        assert_eq!(parse_http_prefix("/").unwrap(), "");
+        assert_eq!(parse_http_prefix("tilecache").unwrap(), "/tilecache");
+        assert_eq!(parse_http_prefix("/tilecache/").unwrap(), "/tilecache");
+        assert!(parse_http_prefix("/../tilecache").is_err());
+        assert!(parse_http_prefix("/tilecache?x=1").is_err());
     }
 }

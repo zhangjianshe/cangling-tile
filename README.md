@@ -226,6 +226,31 @@ docker run --rm -p 7601:7601 \
   harbor.cangling.cn:22002/cangling/cangling-tile:latest
 ```
 
+部署到反向代理子路径时，设置统一的 HTTP 前缀。例如将服务发布到
+`/tilecache/`：
+
+```bash
+docker run --rm -p 7601:7601 \
+  -e CANGLING_TILE_HTTP_PREFIX=/tilecache \
+  -e CANGLING_TILE_AUTH_TOKEN=change-me \
+  harbor.cangling.cn:22002/cangling/cangling-tile:latest
+```
+
+Nginx 必须保留此前缀转发，因此 `proxy_pass` 后不要添加 `/`：
+
+```nginx
+location ^~ /tilecache/ {
+    proxy_pass http://cangling-tile:7601;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+配置后 Dashboard、API、瓦片、OpenLayers 静态资源、会话 Cookie 和容器健康检查
+都会使用 `/tilecache` 前缀。缺省前缀为空，继续从根路径提供服务。
+
 镜像使用固定 UID `10001` 运行。Docker named volume 会由 Docker 管理；使用宿主机
 bind mount 时，需要预先让目录对 UID 10001 可写，例如：
 
@@ -241,6 +266,7 @@ sudo chown -R 10001:10001 ./tiledata ./config
 | 变量 | 缺省值 | 说明 |
 | --- | --- | --- |
 | `CANGLING_TILE_ADDR` | `0.0.0.0:7601` | 监听地址 |
+| `CANGLING_TILE_HTTP_PREFIX` | 空 | 可选 HTTP 路径前缀，例如 `/tilecache`；会自动规范化首尾 `/` |
 | `CANGLING_TILE_WORKER_THREADS` | `4` | Tokio 异步运行时工作线程数；高并发实例可按压测结果增大 |
 | `CANGLING_TILE_ROOT` | `./tiledata` | 当前工作目录下的瓦片数据库根目录；Docker Volume 为 `/app/tiledata` |
 | `CANGLING_TILE_CONFIG_DIR` | `./config` | 当前实例的管理数据库目录；Docker Volume 为 `/app/config`，多实例不得共享 |

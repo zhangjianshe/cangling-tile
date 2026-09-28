@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     apply_legacy_environment();
     let config = Config::parse();
     if matches!(&config.command, Some(Command::Healthcheck)) {
-        return healthcheck(config.addr);
+        return healthcheck(config.addr, &config.http_prefix);
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.worker_threads.max(1))
@@ -49,7 +49,7 @@ fn apply_legacy_environment() {
     }
 }
 
-fn healthcheck(address: SocketAddr) -> Result<()> {
+fn healthcheck(address: SocketAddr, http_prefix: &str) -> Result<()> {
     let target = SocketAddr::new(
         if address.ip().is_unspecified() {
             IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
@@ -61,7 +61,10 @@ fn healthcheck(address: SocketAddr) -> Result<()> {
     let mut stream = TcpStream::connect_timeout(&target, Duration::from_secs(2))?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    stream.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+    let request = format!(
+        "GET {http_prefix}/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes())?;
     let mut response = [0_u8; 64];
     let length = stream.read(&mut response)?;
     let status = std::str::from_utf8(&response[..length]).unwrap_or_default();
@@ -87,6 +90,7 @@ async fn run(config: Config) -> Result<()> {
     tracing::info!(
         "cangling-tile effective configuration\n\
          ├─ listen address   : {}\n\
+         ├─ HTTP prefix      : {}\n\
          ├─ tile data root   : {}\n\
          ├─ config directory : {}\n\
          ├─ authentication   : {}\n\
@@ -102,6 +106,11 @@ async fn run(config: Config) -> Result<()> {
          ├─ LRU idle TTL     : {} seconds\n\
          └─ retention days   : {}",
         config.addr,
+        if config.http_prefix.is_empty() {
+            "/"
+        } else {
+            &config.http_prefix
+        },
         config.root_dir.display(),
         config.config_dir.display(),
         if config.auth_token.is_empty() {
@@ -281,6 +290,7 @@ async fn run(config: Config) -> Result<()> {
         cleanup_settings,
         auth,
         secure_cookies: config.secure_cookies,
+        http_prefix: Arc::from(config.http_prefix.clone()),
         catalog_rebuild: Arc::new(std::sync::RwLock::new(CatalogRebuildStatus::default())),
     };
     let app = api::router(state, config.max_tile_bytes);
