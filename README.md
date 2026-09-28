@@ -231,6 +231,11 @@ Dashboard 会根据浏览器当前页面地址自动推导 API、瓦片和静态
 `CANGLING_TILE_HTTP_PREFIX`，并让 Nginx 去掉外部前缀后再转发：
 
 ```nginx
+location = /tilecache {
+    absolute_redirect off;
+    return 308 /tilecache/;
+}
+
 location ^~ /tilecache/ {
     proxy_pass http://cangling-tile:7601/;
     proxy_set_header Host $http_host;
@@ -242,7 +247,9 @@ location ^~ /tilecache/ {
 
 这种模式下，浏览器访问 `/tilecache/`，Dashboard 请求
 `/tilecache/api/...`；Nginx 去掉 `/tilecache/` 后，服务端仍按根路径接收请求。
-注意此模式的 `proxy_pass` 末尾必须有 `/`。
+注意此模式的 `proxy_pass` 末尾必须有 `/`。显式的精确匹配负责将不带尾斜杠的
+`/tilecache` 重定向到相对地址 `/tilecache/`；`absolute_redirect off` 防止 Nginx
+将其改写成可能丢失反向代理外部端口的绝对 URL。
 
 如果反向代理需要保留前缀转发，设置统一的 HTTP 前缀。例如：
 
