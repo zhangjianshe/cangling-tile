@@ -19,7 +19,7 @@
 - 进程内按字节计量的瓦片 LRU，减少热点瓦片反复读取 SQLite 和磁盘
 - 内置运行概览、缓存数据预览和清理策略 Dashboard
 - OpenLayers 资源内置，支持完全离线的数据预览
-- GET 公开，写入与管理 API 支持 Bearer Token；Dashboard 支持管理员会话
+- GET 浏览接口公开；瓦片写入只接受 Bearer Token，所有管理变更只接受 Dashboard 管理员会话
 - amd64/arm64 Docker 发布
 
 ## 运行
@@ -35,7 +35,7 @@ CANGLING_TILE_AUTH_TOKEN=change-me cargo run --release
 
 服务启动时会以 INFO 日志打印全部生效配置；鉴权只打印是否启用，不会输出 Token 明文。
 
-Dashboard 地址为 `http://127.0.0.1:7601/`，GET 请求无需 Token。瓦片写入和删除管理 API 使用 Bearer Token 鉴权。
+Dashboard 地址为 `http://127.0.0.1:7601/`，GET 浏览请求无需 Token。瓦片单块及批量写入使用 Bearer Token；重命名、回收策略、删除、清理设置、立即清理和目录重建等管理接口必须先登录管理员，Bearer Token 不能调用管理接口。
 
 Dashboard 每 30 秒刷新，展示数据库数量、磁盘占用、当前进程内存占用、线程数，以及最近 24 小时逐小时 GET/PUT、命中/未命中和读写流量。进程资源指标从 Linux `/proc/self/status` 实时读取，不写入数据库。请求先在内存中计数，每 60 秒批量写入实例私有的 `./config/cangling-tile-meta.db`，不会给瓦片 SQLite 增加统计写入。服务启动时会恢复最近 90 天的小时数据。
 
@@ -45,7 +45,7 @@ Dashboard 包含三个功能区：
 - **数据预览**：分页查询数据库和图层，使用本地 OpenLayers 浏览缓存瓦片，并执行重命名、回收策略设置和删除操作。
 - **清理策略**：动态修改缓存保留天数、每日清理小时和空闲分片关闭时间，立即执行清理并分页查看清理历史。
 
-清理设置与执行记录保存在实例私有的 `./config/cangling-tile-meta.db`；读取设置和历史无需 Token，保存、立即清理和数据管理操作需要管理员会话或 Bearer Token。
+清理设置与执行记录保存在实例私有的 `./config/cangling-tile-meta.db`；读取设置和历史无需 Token，保存、立即清理和数据管理操作必须使用管理员登录会话。
 
 “数据预览”页按数据库和数据图层浏览现有缓存。数据库和图层列表支持名称或 ID 查询及服务端分页，图层还可筛选“仅显示不可回收图层”；受保护图层名称前显示锁图标。选择图层后使用 OpenLayers 自动定位并预览 PNG、JPEG、WebP 或 MVT/PBF 瓦片。OpenLayers 10.2.0 的 JS/CSS 已嵌入可执行程序，由 `/assets/openlayers/` 提供，不依赖 CDN 或互联网。预览只调用公开的 GET API，不会生成或写入瓦片。
 
@@ -77,7 +77,7 @@ cangling-tile --config-dir ./config reset-password -p 'new-password'
 cangling-tile --config-dir ./config reset-password
 ```
 
-网页登录不会替代服务间 Bearer Token；现有 PUT/DELETE 客户端仍可继续使用 `CANGLING_TILE_AUTH_TOKEN`。
+网页登录会话只用于管理变更，不能替代瓦片生产者使用的服务间 Bearer Token；`CANGLING_TILE_AUTH_TOKEN` 也不能执行 Dashboard 管理操作。
 
 ## API
 
@@ -132,35 +132,40 @@ curl \
 curl \
   'http://127.0.0.1:7601/api/v1/databases/DB_SHA256?page=1&page_size=100&revocable=false'
 
+# 登录管理员并保存会话 Cookie（以下管理操作均使用该 Cookie）
+curl -c admin.cookies -H 'content-type: application/json' \
+  -d '{"password":"-Cangling@zky"}' \
+  http://127.0.0.1:7601/api/v1/auth/login
+
 # 修改数据库显示名称（不改变 SHA256 和目录）
-curl -X PATCH -H 'authorization: Bearer change-me' \
+curl -X PATCH -b admin.cookies \
   -H 'content-type: application/json' \
   -d '{"name":"成都遥感影像库"}' \
   http://127.0.0.1:7601/api/v1/databases/DB_SHA256
 
 # 修改图层显示名称
-curl -X PATCH -H 'authorization: Bearer change-me' \
+curl -X PATCH -b admin.cookies \
   -H 'content-type: application/json' \
   -d '{"name":"2026年5月卫星影像"}' \
   http://127.0.0.1:7601/api/v1/databases/DB_SHA256/tilesets/ITEM_SHA256
 
 # 从磁盘重新建立管理目录（保留显示名称）
-curl -X POST -H 'authorization: Bearer change-me' \
+curl -X POST -b admin.cookies \
   http://127.0.0.1:7601/api/v1/admin/catalog/rebuild
 
 # 查询后台重建进度（GET 无需 Token）
 curl http://127.0.0.1:7601/api/v1/admin/catalog/rebuild
 
 # 删除一个影像瓦片目录及其全部 .s 分片
-curl -X DELETE -H 'authorization: Bearer change-me' \
+curl -X DELETE -b admin.cookies \
   http://127.0.0.1:7601/api/v1/databases/DB_SHA256/tilesets/ITEM_SHA256
 
 # 删除整个瓦片数据库目录
-curl -X DELETE -H 'authorization: Bearer change-me' \
+curl -X DELETE -b admin.cookies \
   http://127.0.0.1:7601/api/v1/databases/DB_SHA256
 
 # 立即清理 7 天未访问的数据
-curl -X DELETE -H 'authorization: Bearer change-me' \
+curl -X DELETE -b admin.cookies \
   'http://127.0.0.1:7601/api/v1/admin/cleanup?days=7'
 ```
 
@@ -208,7 +213,7 @@ GET /api/v1/admin/cleanup/history?page=1&page_size=20
 - 不可回收的数据库或图层不会被定时任务删除，但不限制管理员手动删除。
 - 自动删除数据库或图层都会写入清理历史。
 
-写接口需要管理员会话或 Bearer Token：
+下列管理接口必须使用管理员登录会话，Bearer Token 无权调用：
 
 ```text
 PUT /api/v1/databases/{database}/revocable
@@ -297,7 +302,7 @@ sudo chown -R 10001:10001 ./tiledata ./config
 | `CANGLING_TILE_WORKER_THREADS` | `4` | Tokio 异步运行时工作线程数；高并发实例可按压测结果增大 |
 | `CANGLING_TILE_ROOT` | `./tiledata` | 当前工作目录下的瓦片数据库根目录；Docker Volume 为 `/app/tiledata` |
 | `CANGLING_TILE_CONFIG_DIR` | `./config` | 当前实例的管理数据库目录；Docker Volume 为 `/app/config`，多实例不得共享 |
-| `CANGLING_TILE_AUTH_TOKEN` | 空 | PUT/DELETE/管理 API 的 Bearer Token；生产启动必须设置，GET 始终公开 |
+| `CANGLING_TILE_AUTH_TOKEN` | 空 | 单块与批量瓦片写入 API 的 Bearer Token；生产启动必须设置，不能用于管理变更，GET 浏览始终公开 |
 | `CANGLING_TILE_ALLOW_UNAUTHENTICATED_WRITES` | `false` | 仅隔离开发环境使用；显式设为 `true` 才允许无 Token 启动 |
 | `CANGLING_TILE_SECURE_COOKIES` | `false` | 通过 HTTPS 反向代理提供 Dashboard 时设为 `true`，为会话 Cookie 增加 `Secure` |
 | `CANGLING_TILE_ADMIN_PASSWORD` | `-Cangling@zky` | Dashboard 管理员初始密码；仅在管理员不存在时使用，部署后应立即修改 |

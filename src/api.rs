@@ -123,12 +123,18 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
         .route("/api/v1/databases", get(list_databases))
         .route("/api/v1/databases/{database}", get(database_status));
 
-    let protected = Router::new()
+    let tile_writes = Router::new()
         .route("/api/v1/tiles/batch", post(put_tile_batch))
         .route(
             "/tiles/{database}/{item}/{z}/{x}/{y_ext}",
             axum::routing::put(put_tile),
         )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            authorize_tile_write,
+        ));
+
+    let admin = Router::new()
         .route(
             "/api/v1/databases/{database}",
             delete(delete_database).patch(rename_database),
@@ -150,13 +156,14 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
         .route("/api/v1/admin/settings", put(update_cleanup_settings))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            authorize,
+            authorize_admin,
         ));
 
     let app = Router::new()
         .route("/health", get(health))
         .merge(public)
-        .merge(protected)
+        .merge(tile_writes)
+        .merge(admin)
         .layer(RequestBodyLimitLayer::new(max_tile_bytes))
         .layer(DefaultBodyLimit::disable())
         .layer(PropagateRequestIdLayer::x_request_id())
@@ -182,7 +189,7 @@ async fn health() -> Json<HealthResponse<'static>> {
     })
 }
 
-async fn authorize(
+async fn authorize_tile_write(
     State(state): State<AppState>,
     request: Request,
     next: Next,
@@ -196,12 +203,23 @@ async fn authorize(
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == expected);
+    if !bearer_valid {
+        return Err(ApiError::Unauthorized);
+    }
+    Ok(next.run(request).await)
+}
+
+async fn authorize_admin(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
     let session_valid = if let Some(token) = cookie_token(request.headers()) {
         state.auth.valid_session(token).await.unwrap_or(false)
     } else {
         false
     };
-    if !bearer_valid && !session_valid {
+    if !session_valid {
         return Err(ApiError::Unauthorized);
     }
     Ok(next.run(request).await)
@@ -1183,7 +1201,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_is_public_but_put_requires_token() {
+    async fn browsing_is_public_but_tile_writes_require_bearer_token() {
         let temp = tempfile::tempdir().unwrap();
         let store = TileStore::open(&temp.path().join("tiles"), 1, 8)
             .await
@@ -1273,6 +1291,7 @@ mod tests {
         );
 
         let put_response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("PUT")
@@ -1283,6 +1302,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(put_response.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized_put = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/tiles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/1/1/1.png")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::from("tile"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized_put.status(), StatusCode::NO_CONTENT);
 
         let mut prefixed_state = state;
         prefixed_state.http_prefix = Arc::from("/tilecache");
@@ -1308,6 +1340,96 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(root_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn management_writes_require_admin_session_and_reject_bearer_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("config");
+        crate::auth::reset_password(&config_dir, Some("-Cangling@zky".to_owned()))
+            .await
+            .unwrap();
+        let auth = Arc::new(crate::auth::AuthService::open(&config_dir).await.unwrap());
+        let session = auth
+            .login("-Cangling@zky".to_owned())
+            .await
+            .unwrap()
+            .unwrap();
+        let store = TileStore::open(&temp.path().join("tiles"), 1, 8)
+            .await
+            .unwrap();
+        let state = AppState {
+            store: store.clone(),
+            catalog: Catalog::open(&config_dir, store).await.unwrap(),
+            auth_token: Arc::from("secret"),
+            stats: AccessStats::open(&config_dir).await.unwrap(),
+            cleanup_settings: Arc::new(RwLock::new(CleanupSettings {
+                retention_days: 7,
+                cleanup_hour: 4,
+                shard_idle_seconds: 300,
+            })),
+            auth,
+            secure_cookies: false,
+            http_prefix: Arc::from(""),
+            catalog_rebuild: Arc::new(StdRwLock::new(CatalogRebuildStatus::default())),
+        };
+        let app = router(state, 1024);
+        let uri = "/api/v1/databases/missing/revocable";
+
+        let public_read = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(public_read.status(), StatusCode::OK);
+
+        let bearer = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"revocable":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bearer.status(), StatusCode::UNAUTHORIZED);
+
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"revocable":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        let authenticated = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(uri)
+                    .header(header::COOKIE, format!("cangling_tile_session={session}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"revocable":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authenticated.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
