@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
@@ -112,12 +112,13 @@ impl AuthService {
 
 pub async fn reset_password(config_dir: &Path, password: Option<String>) -> Result<()> {
     let auth = AuthService::open(config_dir).await?;
+    let policy = crate::password_policy::PasswordPolicy::from_env().map_err(anyhow::Error::msg)?;
     let generated = password.is_none();
-    let password =
-        password.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..16].to_owned());
-    if password.len() < 8 {
-        bail!("密码至少需要 8 个字符")
-    }
+    let password = match password {
+        Some(password) => password,
+        None => policy.generate().map_err(anyhow::Error::msg)?,
+    };
+    policy.validate(&password).map_err(anyhow::Error::msg)?;
     let value = password.clone();
     let hash = tokio::task::spawn_blocking(move || hash(&value)).await??;
     sqlx::query("INSERT INTO admin_user(username,password_hash) VALUES('admin',?) ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash")

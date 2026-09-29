@@ -67,6 +67,8 @@ Dashboard 未登录时全部管理设置只读。首次启动且管理数据库�
 
 Docker 部署可以设置 `CANGLING_TILE_ADMIN_PASSWORD` 初始化管理员密码。该变量只在管理员不存在时使用，容器重启不会覆盖已经保存的密码。生产环境优先通过 Compose secret、Kubernetes Secret 或受保护的环境文件注入，不要把明文密码提交到仓库。
 
+管理员密码缺省要求 8–128 位，并至少包含一个大写字母、一个小写字母和一个特殊字符。首次初始化、`CANGLING_TILE_ADMIN_PASSWORD` 和 `reset-password -p` 都执行同一校验；省略 `-p` 时生成符合规则的 8 位随机密码。可通过 `CANGLING_TILE_PASSWORD_REGEX`、`CANGLING_TILE_PASSWORD_HINT` 和 `CANGLING_TILE_PASSWORD_GENERATED_LENGTH` 自定义规则、错误提示和随机密码长度。自定义正则无法由内置字符集自动生成时，应通过 `-p` 显式指定符合规则的密码。
+
 ```bash
 # 指定密码
 cangling-tile --config-dir ./config reset-password -p 'new-password'
@@ -299,6 +301,9 @@ sudo chown -R 10001:10001 ./tiledata ./config
 | `CANGLING_TILE_ALLOW_UNAUTHENTICATED_WRITES` | `false` | 仅隔离开发环境使用；显式设为 `true` 才允许无 Token 启动 |
 | `CANGLING_TILE_SECURE_COOKIES` | `false` | 通过 HTTPS 反向代理提供 Dashboard 时设为 `true`，为会话 Cookie 增加 `Secure` |
 | `CANGLING_TILE_ADMIN_PASSWORD` | 空 | Dashboard 管理员初始密码；仅在管理员不存在时使用，未设置则随机生成 |
+| `CANGLING_TILE_PASSWORD_REGEX` | 8–128 位且包含大小写和特殊字符 | 管理员密码校验正则，支持前瞻等扩展语法 |
+| `CANGLING_TILE_PASSWORD_HINT` | 密码规则的中文说明 | 密码不符合自定义正则时返回的提示文本 |
+| `CANGLING_TILE_PASSWORD_GENERATED_LENGTH` | `8` | 自动生成管理员密码的长度，范围 8–128 |
 | `CANGLING_TILE_MAX_TILE_BYTES` | `33554432` | 单瓦片最大字节数 |
 | `CANGLING_TILE_MEMORY_CACHE_BYTES` | `536870912` | 进程内瓦片 LRU 容量（字节），即 512 MiB；`0` 禁用 |
 | `CANGLING_TILE_MEMORY_CACHE_MAX_TILE_BYTES` | `2097152` | 允许进入 LRU 的单瓦片最大字节数，即 2 MiB |

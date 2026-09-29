@@ -3,6 +3,7 @@ mod catalog;
 mod config;
 mod error;
 mod model;
+mod password_policy;
 mod stats;
 mod store;
 mod system;
