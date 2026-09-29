@@ -1,6 +1,6 @@
 [package]
 name = "cangling-tile"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2021"
 description = "Centralized SQLite-backed tile cache service"
 
