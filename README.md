@@ -63,11 +63,11 @@ GET 在访问 SQLite 前会查询进程内瓦片 LRU。LRU 按瓦片实际字节
 
 管理数据库位于实例本地的 `config` 目录，不放在共享的 `tiledata` 中。多实例可以共享或访问同一瓦片数据服务，但每个 `cangling-tile` 实例的管理数据库和运行统计应独立保存，不能让多个实例直接并发写同一个管理 SQLite。
 
-Dashboard 未登录时全部管理设置只读。首次启动且管理数据库中没有管理员时，服务会自动生成随机初始密码并在启动日志中只显示一次；请用它从页面左下角“管理员登录”。登录会话两小时无操作后失效，重置密码会注销全部旧会话：
+Dashboard 未登录时全部管理设置只读。首次启动且管理数据库中没有管理员时，如果没有设置 `CANGLING_TILE_ADMIN_PASSWORD`，服务使用缺省初始密码 `-Cangling@zky`；请用它从页面左下角“管理员登录”，并在部署后立即修改。登录会话两小时无操作后失效，重置密码会注销全部旧会话：
 
 Docker 部署可以设置 `CANGLING_TILE_ADMIN_PASSWORD` 初始化管理员密码。该变量只在管理员不存在时使用，容器重启不会覆盖已经保存的密码。生产环境优先通过 Compose secret、Kubernetes Secret 或受保护的环境文件注入，不要把明文密码提交到仓库。
 
-管理员密码缺省要求 8–128 位，并至少包含一个大写字母、一个小写字母和一个特殊字符。首次初始化、`CANGLING_TILE_ADMIN_PASSWORD` 和 `reset-password -p` 都执行同一校验；省略 `-p` 时生成符合规则的 8 位随机密码。可通过 `CANGLING_TILE_PASSWORD_REGEX`、`CANGLING_TILE_PASSWORD_HINT` 和 `CANGLING_TILE_PASSWORD_GENERATED_LENGTH` 自定义规则、错误提示和随机密码长度。自定义正则无法由内置字符集自动生成时，应通过 `-p` 显式指定符合规则的密码。
+管理员密码缺省要求 8–128 位，并至少包含一个大写字母、一个小写字母和一个特殊字符。首次初始化、`CANGLING_TILE_ADMIN_PASSWORD` 和 `reset-password -p` 都执行同一校验；手工执行 `reset-password` 并省略 `-p` 时仍生成符合规则的 8 位随机密码。可通过 `CANGLING_TILE_PASSWORD_REGEX`、`CANGLING_TILE_PASSWORD_HINT` 和 `CANGLING_TILE_PASSWORD_GENERATED_LENGTH` 自定义规则、错误提示和随机密码长度。自定义正则无法由内置字符集自动生成时，应通过 `-p` 显式指定符合规则的密码。
 
 ```bash
 # 指定密码
@@ -300,7 +300,7 @@ sudo chown -R 10001:10001 ./tiledata ./config
 | `CANGLING_TILE_AUTH_TOKEN` | 空 | PUT/DELETE/管理 API 的 Bearer Token；生产启动必须设置，GET 始终公开 |
 | `CANGLING_TILE_ALLOW_UNAUTHENTICATED_WRITES` | `false` | 仅隔离开发环境使用；显式设为 `true` 才允许无 Token 启动 |
 | `CANGLING_TILE_SECURE_COOKIES` | `false` | 通过 HTTPS 反向代理提供 Dashboard 时设为 `true`，为会话 Cookie 增加 `Secure` |
-| `CANGLING_TILE_ADMIN_PASSWORD` | 空 | Dashboard 管理员初始密码；仅在管理员不存在时使用，未设置则随机生成 |
+| `CANGLING_TILE_ADMIN_PASSWORD` | `-Cangling@zky` | Dashboard 管理员初始密码；仅在管理员不存在时使用，部署后应立即修改 |
 | `CANGLING_TILE_PASSWORD_REGEX` | 8–128 位且包含大小写和特殊字符 | 管理员密码校验正则，支持前瞻等扩展语法 |
 | `CANGLING_TILE_PASSWORD_HINT` | 密码规则的中文说明 | 密码不符合自定义正则时返回的提示文本 |
 | `CANGLING_TILE_PASSWORD_GENERATED_LENGTH` | `8` | 自动生成管理员密码的长度，范围 8–128 |

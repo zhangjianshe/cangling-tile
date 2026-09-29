@@ -25,6 +25,8 @@ use store::TileStore;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
+const DEFAULT_ADMIN_PASSWORD: &str = "-Cangling@zky";
+
 fn main() -> Result<()> {
     apply_legacy_environment();
     let config = Config::parse();
@@ -154,12 +156,14 @@ async fn run(config: Config) -> Result<()> {
     }
     let auth_service = auth::AuthService::open(&config.config_dir).await?;
     if !auth_service.configured().await? {
-        if config.admin_password.is_some() {
+        let initial_password = if let Some(password) = config.admin_password.clone() {
             eprintln!("尚未配置 Dashboard 管理员，使用 CANGLING_TILE_ADMIN_PASSWORD 初始化。");
+            password
         } else {
-            eprintln!("尚未配置 Dashboard 管理员，正在生成初始密码。");
-        }
-        auth::reset_password(&config.config_dir, config.admin_password.clone()).await?;
+            eprintln!("尚未配置 Dashboard 管理员，使用缺省初始密码初始化。");
+            DEFAULT_ADMIN_PASSWORD.to_owned()
+        };
+        auth::reset_password(&config.config_dir, Some(initial_password)).await?;
     }
     let auth = Arc::new(auth_service);
     let cleanup_settings = Arc::new(RwLock::new(
