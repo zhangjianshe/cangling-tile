@@ -1046,13 +1046,19 @@ fn validate_key(key: &TileKey) -> Result<(), ApiError> {
 }
 
 fn validate_id(name: &str, value: &str) -> Result<(), ApiError> {
+    // CIS appends render versions, RGB channels and UUIDs to the source SHA256.
+    // Items use <first 4 bytes>/<remainder>, so 256 bytes leaves each filesystem
+    // component below the usual 255-byte limit without changing existing paths.
+    let max_length = if name == "item" { 256 } else { 128 };
     if value.is_empty()
-        || value.len() > 128
+        || value.len() > max_length
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err(ApiError::Invalid(format!("invalid {name}")));
+        return Err(ApiError::Invalid(format!(
+            "invalid {name}: expected 1 to {max_length} ASCII letters, digits, hyphens or underscores"
+        )));
     }
     Ok(())
 }
@@ -1090,6 +1096,40 @@ async fn remove_empty_parents(directory: Option<&Path>, root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_extended_item_ids_without_relaxing_path_safety() {
+        assert!(validate_id("item", &"a".repeat(256)).is_ok());
+        assert!(validate_id("item", &"a".repeat(257)).is_err());
+        assert!(validate_id("database", &"a".repeat(128)).is_ok());
+        assert!(validate_id("database", &"a".repeat(129)).is_err());
+        for value in ["", "../tiles", "a/b", "a\\b", "a?b", "a#b", "a b", "图层"] {
+            assert!(validate_id("item", value).is_err(), "accepted {value:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn extended_item_ids_survive_storage_listing_and_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TileStore::open(dir.path(), 1, 8).await.unwrap();
+        let database = "a".repeat(64);
+        let item = format!(
+            "{}_rgb_10_11_12_raster-color-v2_{}",
+            "b".repeat(64),
+            "c".repeat(162)
+        );
+        assert_eq!(item.len(), 256);
+        let tile = key(&database, &item, 12, 3357, 1718);
+        store.put(tile.clone(), vec![1, 2, 3]).await.unwrap();
+        assert_eq!(store.get(tile.clone()).await.unwrap(), Some(vec![1, 2, 3]));
+        let layers = store.tilesets(&database).await.unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].item, item);
+        assert_eq!(store.tileset_count(&database).await.unwrap(), 1);
+        store.drop_tileset(&database, &item).await.unwrap();
+        assert!(store.get(tile).await.unwrap().is_none());
+        assert!(store.tilesets(&database).await.unwrap().is_empty());
+    }
 
     fn key(database: &str, item: &str, z: i64, x: i64, y: i64) -> TileKey {
         TileKey {

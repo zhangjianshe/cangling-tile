@@ -13,7 +13,7 @@ use crate::{
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -126,6 +126,10 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
     let tile_writes = Router::new()
         .route("/api/v1/tiles/batch", post(put_tile_batch))
         .route(
+            "/api/v1/tilesets/{database}/{item}",
+            delete(invalidate_tileset),
+        )
+        .route(
             "/tiles/{database}/{item}/{z}/{x}/{y_ext}",
             axum::routing::put(put_tile),
         )
@@ -214,6 +218,24 @@ async fn authorize_admin(
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    // Map's cache writer may invalidate one tileset, but it cannot perform
+    // database-wide or other administrative operations.
+    let segments = request.uri().path().split('/').collect::<Vec<_>>();
+    let tile_delete = request.method() == Method::DELETE
+        && segments.len() >= 7
+        && segments[segments.len() - 4] == "databases"
+        && segments[segments.len() - 2] == "tilesets";
+    if tile_delete && !state.auth_token.is_empty() {
+        let expected = format!("Bearer {}", state.auth_token);
+        if request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value == expected)
+        {
+            return Ok(next.run(request).await);
+        }
+    }
     let session_valid = if let Some(token) = cookie_token(request.headers()) {
         state.auth.valid_session(token).await.unwrap_or(false)
     } else {
@@ -606,6 +628,17 @@ async fn delete_tileset(
             },
         )
         .await;
+        state.catalog.remove_layer(&database, &item).await?;
+    }
+    Ok(Json(DeleteResponse { deleted }))
+}
+
+async fn invalidate_tileset(
+    State(state): State<AppState>,
+    Path((database, item)): Path<(String, String)>,
+) -> Result<Json<DeleteResponse>, ApiError> {
+    let deleted = state.store.drop_tileset(&database, &item).await?;
+    if deleted > 0 {
         state.catalog.remove_layer(&database, &item).await?;
     }
     Ok(Json(DeleteResponse { deleted }))
@@ -1403,6 +1436,61 @@ mod tests {
             .unwrap();
         assert_eq!(bearer.status(), StatusCode::UNAUTHORIZED);
 
+        let writer_without_token = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/tilesets/missing/item")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(writer_without_token.status(), StatusCode::UNAUTHORIZED);
+
+        let writer_with_token = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/tilesets/missing/item")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(writer_with_token.status(), StatusCode::OK);
+
+        let map_compatibility = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/databases/missing/tilesets/item")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(map_compatibility.status(), StatusCode::OK);
+
+        let database_delete = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/databases/missing")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(database_delete.status(), StatusCode::UNAUTHORIZED);
+
         let unauthenticated = app
             .clone()
             .oneshot(
@@ -1472,6 +1560,117 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn cis_render_suffix_works_with_single_batch_and_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TileStore::open(&temp.path().join("tiles"), 1, 8)
+            .await
+            .unwrap();
+        let state = AppState {
+            store: store.clone(),
+            catalog: Catalog::open(&temp.path().join("config"), store)
+                .await
+                .unwrap(),
+            auth_token: Arc::from("secret"),
+            stats: AccessStats::open(&temp.path().join("config"))
+                .await
+                .unwrap(),
+            cleanup_settings: Arc::new(RwLock::new(CleanupSettings {
+                retention_days: 7,
+                cleanup_hour: 4,
+                shard_idle_seconds: 300,
+            })),
+            auth: Arc::new(
+                crate::auth::AuthService::open(&temp.path().join("config"))
+                    .await
+                    .unwrap(),
+            ),
+            secure_cookies: false,
+            http_prefix: Arc::from(""),
+            catalog_rebuild: Arc::new(StdRwLock::new(CatalogRebuildStatus::default())),
+        };
+        let app = router(state.clone(), 1024 * 1024);
+        let database = "a".repeat(64);
+        let suffix = "_rgb_10_11_12_raster-color-v2_b5a7327a-82d5-325d-bf68-195304d3e80f";
+        let item = format!("{}{suffix}", "b".repeat(64));
+        assert!(item.len() > 128);
+        let bytes = b"\x89PNG\r\n\x1a\nexample";
+        let url = format!("/tiles/{database}/{item}/12/3357/1718.tile");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&url)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header("X-Tile-Layer-Name", "CIS%20RGB%20image")
+                    .body(Body::from(bytes.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let body = serde_json::json!({
+            "database": database, "item": item, "format": "tile",
+            "tiles": [{"z": 12, "x": 3358, "y": 1718, "data": BASE64.encode(bytes)}]
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/tiles/batch")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        for x in [3357, 3358] {
+            for extension in ["tile", "png"] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("/tiles/{database}/{item}/12/{x}/1718.{extension}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(
+                    axum::body::to_bytes(response.into_body(), 1024)
+                        .await
+                        .unwrap()
+                        .as_ref(),
+                    bytes
+                );
+            }
+        }
+        state.catalog.flush().await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/databases/{database}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16384)
+            .await
+            .unwrap();
+        let catalog: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(catalog["items"][0]["item"], item);
+        assert_eq!(catalog["items"][0]["tile_count"], 2);
     }
 
     #[tokio::test]

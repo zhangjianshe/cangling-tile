@@ -83,6 +83,12 @@ cangling-tile --config-dir ./config reset-password
 
 XYZ URL 为 `/tiles/{databaseSha256}/{itemSha256}/{z}/{x}/{y}.{format}`。
 
+数据库 ID 支持 1–128 个 ASCII 字母、数字、下划线或连字符；图层 ID 支持 1–256 个相同字符。
+图层 ID 可以是原始 SHA256，也可以附加渲染版本、UUID 和 RGB 通道，例如
+`<SHA256>_rgb_10_11_12_raster-color-v2_b5a7327a-82d5-325d-bf68-195304d3e80f`。
+单瓦片 PUT/GET、批量写入、目录扫描和删除均保留完整 ID，各样式及通道使用独立缓存。
+`.tile` 可用于读写原始瓦片字节，实际 PNG 内容仍可用 `.png` URL 读取和预览。
+
 瓦片内容不能为空：PUT 0 字节数据返回 `400 Bad Request`；GET 遇到历史空记录按缓存未命中返回 `404 Not Found`。客户端可据此决定是否生成并回写瓦片。
 
 Dashboard 地图预览会在瓦片 URL 上附加 `preview=1`。仅在该模式下，缺失的栅格瓦片返回内置的浅灰色 `NOT CACHED` 水印占位图、HTTP 200 和 `X-Cangling-Tile-Miss: true`，避免浏览器控制台产生大量图片 404，并明确标识未缓存区域；普通客户端请求仍返回 404，缓存生成判断不受影响。
