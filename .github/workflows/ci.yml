@@ -56,6 +56,9 @@ jobs:
           retention-days: 3
 
   docker:
+    concurrency:
+      group: drive-base-images-cangling-tile
+      cancel-in-progress: false
     name: docker image
     runs-on: ubuntu-latest
     needs: build
@@ -115,19 +118,18 @@ jobs:
           docker image save "$RELEASE_IMAGE" | gzip -1 > dist/cangling-tile-amd64.tar.gz
           docker pull --platform linux/arm64 "$RELEASE_IMAGE"
           docker image save "$RELEASE_IMAGE" | gzip -1 > dist/cangling-tile-arm64.tar.gz
-      - name: Upload image archives to software site
+      - name: Set up Python for drive upload
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test drive image uploader
+        run: python scripts/test-upload-drive-image.py
+      - name: Upload offline images to cangling-repo drive
         env:
-          CANGLING_TOKEN: ${{ secrets.CANGLING_TOKEN }}
-          SOFTWARE_TOKEN: ${{ secrets.SOFTWARE_TOKEN }}
+          WRITE_TOKEN: ${{ secrets.WRITE_TOKEN }}
+        shell: bash
         run: |
+          set -euo pipefail
           for arch in amd64 arm64; do
-            curl --fail-with-body --show-error --progress-bar -k -X POST \
-              "https://soft.cangling.cn:22002/api/v1/software/upload" \
-              -H "API-TOKEN: $CANGLING_TOKEN" \
-              -F "token=$SOFTWARE_TOKEN" \
-              -F "version=latest" \
-              -F "name=cangling-tile-${arch}.tar.gz" \
-              -F "summary=Automatic release for version ${{ github.ref_name }}" \
-              -F "os=linux" -F "arch=${arch}" \
-              -F "file=@dist/cangling-tile-${arch}.tar.gz"
+            python scripts/upload-drive-image.py --project cangling-tile --arch "$arch" --file "dist/cangling-tile-${arch}.tar.gz"
           done

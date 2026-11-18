@@ -352,3 +352,14 @@ sudo chown -R 10001:10001 ./tiledata ./config
 ```
 
 仓库需要配置：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`、`HARBOR_USERNAME`、`HARBOR_PASSWORD`、`CANGLING_TOKEN`、`SOFTWARE_TOKEN`。
+
+### 离线镜像网盘发布
+
+发布工作流将离线镜像上传到 `cangling-repo/apps/base-images/linux/{amd64,arm64}`，
+使用固定名称 `cangling-tile-linux-{arch}.tar.gz` 和对应的 `.sha256` 文件，
+替换原有的软件仓库上传步骤。GitHub 仓库需配置 Actions Secret `WRITE_TOKEN`，
+权限包含目标目录的读、写、删除；凭证不写入代码。
+
+上传采用分块续传和 SHA-256 校验，相同内容跳过。现有网盘 API 需要先删除同名旧文件再上传，
+上传期间该文件暂时不可用，失败后可重跑任务续传。校验文件在镜像上传成功后发布；
+共享 `SHA256SUMS` 及历史带版本名文件保留，不覆盖其他项目的数据。
