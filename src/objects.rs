@@ -133,13 +133,51 @@ async fn remove(
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
-async fn stats(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+pub(crate) async fn stats(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let rows=sqlx::query("SELECT dataset,revision,count(*) AS objects,coalesce(sum(length(data)),0) AS bytes,coalesce(sum(hits),0) AS hits FROM objects GROUP BY dataset,revision ORDER BY dataset,revision")
         .fetch_all(s.store.objects().await?).await?;
     Ok(Json(
         serde_json::json!({"datasets":rows.iter().map(|r|serde_json::json!({"dataset":r.get::<String,_>("dataset"),"revision":r.get::<String,_>("revision"),"objects":r.get::<i64,_>("objects"),"bytes":r.get::<i64,_>("bytes"),"hits":r.get::<i64,_>("hits")})).collect::<Vec<_>>()}),
     ))
 }
+pub(crate) async fn script() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        include_str!("objects3d.js"),
+    )
+}
+
+/// Administrator-session route; the browser never receives the Map service token.
+pub(crate) async fn remove_admin(
+    State(s): State<AppState>,
+    Path((d, r)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if headers
+        .get("sec-fetch-site")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|v| !matches!(v, "same-origin" | "none"))
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    key(&d, &r, "tileset.json")?;
+    // One statement snapshots precisely what was deleted, even with concurrent fills.
+    let rows = sqlx::query(
+        "DELETE FROM objects WHERE dataset=? AND revision=? RETURNING length(data) AS bytes",
+    )
+    .bind(&d)
+    .bind(&r)
+    .fetch_all(s.store.objects().await?)
+    .await?;
+    let bytes: i64 = rows.iter().map(|row| row.get::<i64, _>("bytes")).sum();
+    Ok(Json(
+        serde_json::json!({"dataset":d,"revision":r,"deleted_objects":rows.len(),"deleted_bytes":bytes}),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +209,7 @@ mod tests {
             http_prefix: Arc::from(""),
             catalog_rebuild: Arc::new(RwLock::new(CatalogRebuildStatus::default())),
         };
+        let auth_service = s.auth.clone();
         let app = crate::api::router(s, 1024);
         let path = format!("/api/v1/objects3d/demo/{}/nested/a.glb", "a".repeat(64));
         async fn call(
@@ -250,6 +289,98 @@ mod tests {
             serde_json::from_slice(&axum::body::to_bytes(stats.into_body(), 4096).await.unwrap())
                 .unwrap();
         assert_eq!(json["datasets"][0]["hits"], 1);
+        let admin_url = format!("/api/v1/admin/objects3d/demo/{}", "a".repeat(64));
+        for method in ["GET", "DELETE"] {
+            let url = if method == "GET" {
+                "/api/v1/admin/objects3d"
+            } else {
+                &admin_url
+            };
+            assert_eq!(call(&app, method, url, false, "", "").await.status(), 401);
+            assert_eq!(call(&app, method, url, true, "", "").await.status(), 401);
+        }
+        crate::auth::reset_password(&config, Some("Cache-Test-2026!".into()))
+            .await
+            .unwrap();
+        let session = auth_service
+            .login("Cache-Test-2026!".into())
+            .await
+            .unwrap()
+            .unwrap();
+        async fn admin(
+            app: &Router,
+            method: &str,
+            url: &str,
+            session: &str,
+            site: &str,
+        ) -> Response {
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(url)
+                        .header(header::COOKIE, format!("cangling_tile_session={session}"))
+                        .header("sec-fetch-site", site)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+        assert_eq!(
+            admin(
+                &app,
+                "GET",
+                "/api/v1/admin/objects3d",
+                &session,
+                "same-origin"
+            )
+            .await
+            .status(),
+            200
+        );
+        // An administrator session must not grant raw object read/write access.
+        assert_eq!(
+            admin(&app, "GET", &path, &session, "same-origin")
+                .await
+                .status(),
+            401
+        );
+        assert_eq!(
+            admin(&app, "DELETE", &admin_url, &session, "cross-site")
+                .await
+                .status(),
+            401
+        );
+        let second_path = path.replace(&"a".repeat(64), &"b".repeat(64));
+        assert_eq!(
+            call(&app, "PUT", &second_path, true, "model", &sha)
+                .await
+                .status(),
+            204
+        );
+        let response = admin(&app, "DELETE", &admin_url, &session, "same-origin").await;
+        assert_eq!(response.status(), 200);
+        let result: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["deleted_objects"], 1);
+        assert_eq!(result["deleted_bytes"], 5);
+        assert_eq!(call(&app, "GET", &path, true, "", "").await.status(), 404);
+        assert_eq!(
+            call(&app, "GET", &second_path, true, "", "").await.status(),
+            200
+        );
+        auth_service.logout(&session).await.unwrap();
+        assert_eq!(
+            admin(&app, "DELETE", &admin_url, &session, "same-origin")
+                .await
+                .status(),
+            401
+        );
         let revision = path.trim_end_matches("/nested/a.glb");
         assert_eq!(
             call(&app, "DELETE", revision, true, "", "").await.status(),

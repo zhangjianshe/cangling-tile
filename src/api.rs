@@ -111,6 +111,7 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
     let public = Router::new()
         .route("/", get(dashboard))
         .route("/assets/openlayers/ol.js", get(openlayers_js))
+        .route("/assets/objects3d.js", get(crate::objects::script))
         .route("/assets/openlayers/ol.css", get(openlayers_css))
         .route("/api/v1/dashboard", get(dashboard_data))
         .route("/api/v1/admin/settings", get(cleanup_settings))
@@ -139,6 +140,8 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
         ));
 
     let admin = Router::new()
+        .route("/api/v1/admin/objects3d", get(crate::objects::stats))
+        .route("/api/v1/admin/objects3d/{dataset}/{revision}", delete(crate::objects::remove_admin))
         .route(
             "/api/v1/databases/{database}",
             delete(delete_database).patch(rename_database),

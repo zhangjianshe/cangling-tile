@@ -389,3 +389,15 @@ Map 使用独立对象接口缓存发布后的 tileset JSON、GLB、B3DM 等资�
 备份运行中数据库时使用 SQLite backup API，不能只复制主文件而遗漏 WAL。
 
 验证：`cargo test --locked`；跨服务回归脚本位于 cangling-map 的 `scripts/test-3dtiles-cache.py`。
+
+### 管理页面
+
+侧栏「3D Tiles 缓存」按数据集与版本展示文件数、内容大小和持久化命中次数，支持搜索、分页、刷新。
+管理员登录后可查看并清理指定版本；确认窗口显示完整数据集/版本及缓存数量。
+清理不影响 Map 源数据和其他版本，下一次读取会回填。大小是内容字节总量，不是SQLite实际磁盘占用；
+清理后命中次数从新缓存重新累计。
+
+页面使用管理员 Cookie 会话调用 `GET /api/v1/admin/objects3d` 和
+`DELETE /api/v1/admin/objects3d/{dataset}/{revision}`；后者返回实际删除文件数与内容大小。
+服务Bearer凭证不授予这些管理接口权限；管理Cookie也不授予原始对象读写权限。
+前端状态回归：`node scripts/test-objects3d-ui.cjs`。

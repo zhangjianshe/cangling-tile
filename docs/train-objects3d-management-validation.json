@@ -1,0 +1,72 @@
+{
+  "before": [
+    {
+      "bytes": 4791036,
+      "dataset": "stanford-dragon",
+      "hits": 9,
+      "objects": 4,
+      "revision": "c34549b2fa543e6c1c487bb33fcc4f6be3164508ab4f4397ae00a7616ab7f566"
+    },
+    {
+      "bytes": 1864472,
+      "dataset": "zhengzhou-cbd-osm",
+      "hits": 33,
+      "objects": 31,
+      "revision": "e29e9063f176bdd9389f093841798b45aab053d6048e1ff8c39c37ab451c2a71"
+    }
+  ],
+  "deleted": {
+    "dataset": "stanford-dragon",
+    "deleted_bytes": 4791036,
+    "deleted_objects": 4,
+    "revision": "c34549b2fa543e6c1c487bb33fcc4f6be3164508ab4f4397ae00a7616ab7f566"
+  },
+  "other_dataset_unchanged": true,
+  "refill": [
+    {
+      "file": "dragon_high.b3dm",
+      "cache": [
+        "MISS",
+        "HIT"
+      ]
+    },
+    {
+      "file": "dragon_low.b3dm",
+      "cache": [
+        "MISS",
+        "HIT"
+      ]
+    },
+    {
+      "file": "dragon_medium.b3dm",
+      "cache": [
+        "MISS",
+        "HIT"
+      ]
+    },
+    {
+      "file": "tileset.json",
+      "cache": [
+        "MISS",
+        "HIT"
+      ]
+    }
+  ],
+  "restored": [
+    {
+      "bytes": 4791036,
+      "dataset": "stanford-dragon",
+      "hits": 4,
+      "objects": 4,
+      "revision": "c34549b2fa543e6c1c487bb33fcc4f6be3164508ab4f4397ae00a7616ab7f566"
+    },
+    {
+      "bytes": 1864472,
+      "dataset": "zhengzhou-cbd-osm",
+      "hits": 33,
+      "objects": 31,
+      "revision": "e29e9063f176bdd9389f093841798b45aab053d6048e1ff8c39c37ab451c2a71"
+    }
+  ],
+  "logout_rejected": true
+}
