@@ -17,7 +17,7 @@ GIT_HASH="$(git rev-parse --short HEAD)" \
 BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
 cargo build --release --locked
 git add Cargo.toml Cargo.lock
-git commit -m "Release v$next"
+git commit -m "发布 v$next"
 git tag "v$next"
 git push origin HEAD "v$next"
 echo "released v$next"

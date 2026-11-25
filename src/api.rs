@@ -141,7 +141,10 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
 
     let admin = Router::new()
         .route("/api/v1/admin/objects3d", get(crate::objects::stats))
-        .route("/api/v1/admin/objects3d/{dataset}/{revision}", delete(crate::objects::remove_admin))
+        .route(
+            "/api/v1/admin/objects3d/{dataset}/{revision}",
+            delete(crate::objects::remove_admin),
+        )
         .route(
             "/api/v1/databases/{database}",
             delete(delete_database).patch(rename_database),
