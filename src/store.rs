@@ -30,6 +30,7 @@ pub struct TileStore {
 }
 
 struct StoreInner {
+    objects: tokio::sync::OnceCell<SqlitePool>,
     root: PathBuf,
     shards: RwLock<HashMap<PathBuf, Arc<Shard>>>,
     access_touches: Mutex<HashMap<String, SystemTime>>,
@@ -279,6 +280,7 @@ impl TileStore {
             .with_context(|| format!("create tile database root {}", root.display()))?;
         Ok(Self {
             inner: Arc::new(StoreInner {
+                objects: tokio::sync::OnceCell::new(),
                 root: root.to_path_buf(),
                 shards: RwLock::new(HashMap::new()),
                 access_touches: Mutex::new(HashMap::new()),
@@ -287,6 +289,18 @@ impl TileStore {
                 memory_cache: TileMemoryCache::new(memory_cache_bytes, memory_cache_max_tile_bytes),
             }),
         })
+    }
+
+    pub(crate) async fn objects(&self) -> Result<&SqlitePool, ApiError> {
+        self.inner.objects.get_or_try_init(|| async {
+            let pool = SqlitePoolOptions::new().max_connections(4).connect_with(
+                SqliteConnectOptions::new().filename(self.inner.root.join(".tiles3d-cache.sqlite"))
+                    .create_if_missing(true).journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .busy_timeout(Duration::from_secs(5))
+            ).await?;
+            sqlx::query("CREATE TABLE IF NOT EXISTS objects (dataset TEXT NOT NULL, revision TEXT NOT NULL, path TEXT NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL, hits INTEGER NOT NULL DEFAULT 0, accessed INTEGER NOT NULL DEFAULT (unixepoch()), PRIMARY KEY(dataset, revision, path))").execute(&pool).await?;
+            Ok(pool)
+        }).await
     }
 
     pub fn memory_cache_metrics(&self) -> MemoryCacheMetrics {

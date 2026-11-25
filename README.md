@@ -369,3 +369,23 @@ GitHub 仓库配置 Actions Secret `RELEASE_WEBHOOK_SECRET` 和变量
 可手动执行 `Publish existing Harbor images` 工作流，输入已编译的版本及目标架构，
 无需重新编译即可通过同一 webhook 发布。恢复旧版本需明确选择 `allow_downgrade`。
 服务端任务使用 SQLite 保存，失败可重试，worker 重启后恢复未完成任务。
+
+## 3D Tiles 对象缓存
+
+Map 使用独立对象接口缓存发布后的 tileset JSON、GLB、B3DM 等资源，不能将资源路径映射成 XYZ 瓦片。
+所有以下接口（包括读取与统计）均要求 `Authorization: Bearer <CANGLING_TILE_AUTH_TOKEN>`；
+未配置服务 token 时拒绝访问，不沿用开发模式的匿名写权限。浏览器仍只访问 Map，由 Map 检查数据集发布/停用状态。
+
+- `GET /api/v1/objects3d/{dataset}/{revision}/{path}`：命中返回完整二进制与 SHA-256 ETag，未命中 404。
+- `PUT` 同一路径：原始二进制正文，必须带 `X-Content-SHA256`；成功 204，哈希不符 400，
+  同一版本路径已存在不同内容时 409。发布版本须为64位十六进制字符串。
+- `DELETE /api/v1/objects3d/{dataset}/{revision}`：删除指定版本缓存，后续 Map 请求可再次回填。
+- `GET /api/v1/objects3d/stats`：按数据集/版本返回对象数、字节数、持久化命中次数。
+
+对象保存在 `CANGLING_TILE_ROOT/.tiles3d-cache.sqlite`（SQLite WAL），重启保留；
+使用逻辑主键，不将请求路径拼接到磁盘路径。并发上限4，单对象上限32 MiB，同时受
+`CANGLING_TILE_MAX_TILE_BYTES`限制。超过限制的资源由 Map 流式回源。
+对象缓存暂不纳入二维瓦片的自动清理周期；旧版本由上述 DELETE 接口显式回收，SQLite 空闲页可复用。
+备份运行中数据库时使用 SQLite backup API，不能只复制主文件而遗漏 WAL。
+
+验证：`cargo test --locked`；跨服务回归脚本位于 cangling-map 的 `scripts/test-3dtiles-cache.py`。

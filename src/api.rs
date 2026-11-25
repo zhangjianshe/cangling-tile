@@ -165,6 +165,7 @@ pub fn router(state: AppState, max_tile_bytes: usize) -> Router {
 
     let app = Router::new()
         .route("/health", get(health))
+        .merge(crate::objects::router(state.clone()))
         .merge(public)
         .merge(tile_writes)
         .merge(admin)
